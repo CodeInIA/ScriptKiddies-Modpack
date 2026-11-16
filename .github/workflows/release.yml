@@ -1,0 +1,65 @@
+name: Modpack release
+
+# Every few hours, and on demand: when Modrinth has a new version of the modpack, build the .zip,
+# the installer and the .mrpack, and publish them as the latest release. The website links to
+# releases/latest/download/<file>, so it always serves the newest one.
+on:
+  schedule:
+    - cron: "17 */3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Newest version on Modrinth
+        id: modrinth
+        shell: pwsh
+        run: |
+          $v = (Invoke-RestMethod -Uri "https://api.modrinth.com/v2/project/scriptkiddies-modpack/version" `
+            -Headers @{ "User-Agent" = "ScriptKiddies-modpack-builder" } | Where-Object status -eq "listed" | Select-Object -First 1).version_number
+          if (-not $v) { throw "no listed version" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+          gh release view "v$v" 2>$null
+          if ($LASTEXITCODE -eq 0) { "new=false" >> $env:GITHUB_OUTPUT } else { "new=true" >> $env:GITHUB_OUTPUT }
+          exit 0
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Build the downloads
+        if: steps.modrinth.outputs.new == 'true'
+        shell: pwsh
+        run: |
+          node scripts/build-modpack.mjs
+          Compress-Archive -Path build/mods/*.jar -DestinationPath build/ScriptKiddies-modpack.zip
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) { choco install innosetup -y --no-progress }
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          & $iscc "/DMyAppVersion=${{ steps.modrinth.outputs.version }}" installer.iss
+
+      - name: Publish the release
+        if: steps.modrinth.outputs.new == 'true'
+        shell: pwsh
+        run: |
+          $v = "${{ steps.modrinth.outputs.version }}"
+          gh release create "v$v" `
+            build/ScriptKiddies-modpack.zip `
+            build/ScriptKiddies-modpack-installer.exe `
+            build/ScriptKiddies-modpack.mrpack `
+            --title "ScriptKiddies Modpack $v" `
+            --notes "Built from version $v on Modrinth: https://modrinth.com/modpack/scriptkiddies-modpack"
+        env:
+          GH_TOKEN: ${{ github.token }}
