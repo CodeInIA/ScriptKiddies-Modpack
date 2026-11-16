@@ -29,9 +29,14 @@ jobs:
         id: modrinth
         shell: pwsh
         run: |
-          $v = (Invoke-RestMethod -Uri "https://api.modrinth.com/v2/project/scriptkiddies-modpack/version" `
-            -Headers @{ "User-Agent" = "ScriptKiddies-modpack-builder" } | Where-Object status -eq "listed" | Select-Object -First 1).version_number
-          if (-not $v) { throw "no listed version" }
+          try {
+            $v = (Invoke-RestMethod -Uri "https://api.modrinth.com/v2/project/scriptkiddies-modpack/version" `
+              -Headers @{ "User-Agent" = "ScriptKiddies-modpack-builder" } | Where-Object status -eq "listed" | Select-Object -First 1).version_number
+          } catch {
+            # Not public yet (waiting for Modrinth's review): nothing to build this time.
+            Write-Host "The project is not visible on Modrinth yet: $_"
+          }
+          if (-not $v) { "new=false" >> $env:GITHUB_OUTPUT; exit 0 }
           "version=$v" >> $env:GITHUB_OUTPUT
           gh release view "v$v" 2>$null
           if ($LASTEXITCODE -eq 0) { "new=false" >> $env:GITHUB_OUTPUT } else { "new=true" >> $env:GITHUB_OUTPUT }
